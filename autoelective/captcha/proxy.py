@@ -23,11 +23,10 @@ RECOGNITION_WEIGHT = {3: 0.4, 1003: 0.7, 7: 1.0}
 class RecognitionProxy(object):
     def __init__(self):
         self._config = APIConfig()
-        # Initialize connection pool
-        self.conn = aiohttp.TCPConnector(limit_per_host=100, limit=0, ttl_dns_cache=300)
         self.PARALLEL_REQUESTS = 100
         self.results = []
         self.queue = []
+        self.conn = None
 
     def msg_pack(self, raw, typeid):
         encoded = TTShituRecognizer.to_b64(raw)
@@ -41,6 +40,9 @@ class RecognitionProxy(object):
 
     async def gather_with_concurrency(self, trials):
         semaphore = asyncio.Semaphore(self.PARALLEL_REQUESTS)
+        # Create connector lazily when event loop is running
+        if self.conn is None:
+            self.conn = aiohttp.TCPConnector(limit_per_host=100, limit=0, ttl_dns_cache=300)
         session = aiohttp.ClientSession(connector=self.conn)
 
         async def concurrent_post(content):
@@ -61,9 +63,14 @@ class RecognitionProxy(object):
             temp = base_msg.copy()
             temp["typeid"] = method
             self.queue.append(temp)
-        loop = asyncio.get_event_loop()
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
         loop.run_until_complete(self.gather_with_concurrency(self.queue))
-        self.conn.close()
+        if self.conn:
+            self.conn.close()
         print(f"Completed {len(self.queue)} requests with {len(self.results)} results")
         container = [(res[0]['data']['result'], res[1]) for res in self.results]
         unique_res = Counter([res[0] for res in container]).keys()

@@ -38,6 +38,21 @@ is_dual_degree = config.is_dual_degree
 identity = config.identity
 refresh_interval = config.refresh_interval
 refresh_random_deviation = config.refresh_random_deviation
+refresh_random_distribution = config.refresh_random_distribution
+
+# Burst (突发-休息) 模式配置
+burst_short_min = config.burst_short_min
+burst_short_max = config.burst_short_max
+burst_rest_min = config.burst_rest_min
+burst_rest_max = config.burst_rest_max
+burst_count_min = config.burst_count_min
+burst_count_max = config.burst_count_max
+
+# Burst 模式状态
+_burst_state = {
+    "remaining": 0,      # 剩余密集次数
+    "is_burst": True,    # 当前是否在密集期
+}
 supply_cancel_page = config.supply_cancel_page
 iaaa_client_timeout = config.iaaa_client_timeout
 elective_client_timeout = config.elective_client_timeout
@@ -58,13 +73,31 @@ recognizer = TTShituRecognizer()
 asyncRecognizer = RecognitionProxy()
 RECOGNIZER_MAX_ATTEMPT = 15
 
+# UA 选择器，避免连续使用相同的 UA
+_last_ua_index = -1
+
+def _get_random_user_agent():
+    """随机选择 User-Agent，避免与上一次重复"""
+    global _last_ua_index
+    if len(USER_AGENT_LIST) <= 1:
+        return USER_AGENT_LIST[0] if USER_AGENT_LIST else ""
+    
+    # 随机选择，但避免与上一次相同
+    indices = list(range(len(USER_AGENT_LIST)))
+    if _last_ua_index >= 0:
+        indices.remove(_last_ua_index)
+    
+    chosen = random.choice(indices)
+    _last_ua_index = chosen
+    return USER_AGENT_LIST[chosen]
+
 electivePool = Queue(maxsize=elective_client_pool_size)
 reloginPool = Queue(maxsize=elective_client_pool_size)
 
 goals = environ.goals  # let N = len(goals);
 ignored = environ.ignored
 mutexes = np.zeros(0, dtype=np.uint8)  # uint8 [N][N];
-delays = np.zeros(0, dtype=np.int)  # int [N];
+delays = np.zeros(0, dtype=np.int64)  # int [N];
 
 killedElective = ElectiveClient(-1)
 NO_DELAY = -1
@@ -81,10 +114,80 @@ class _ElectiveExpired(Exception):
 
 
 def _get_refresh_interval():
+    """生成随机刷新间隔，支持多种分布类型"""
+    global _burst_state
+    
     if refresh_random_deviation <= 0:
         return refresh_interval
-    delta = (random.random() * 2 - 1) * refresh_random_deviation * refresh_interval
-    return refresh_interval + delta
+    
+    distribution = refresh_random_distribution.lower()
+    
+    if distribution == "burst":
+        # Burst (突发-休息) 模式
+        # 一段时间密集（短间隔连续多次），然后休息（长间隔一次），循环重复
+        if _burst_state["remaining"] <= 0:
+            # 需要切换状态
+            if _burst_state["is_burst"]:
+                # 密集期结束，进入休息期
+                _burst_state["is_burst"] = False
+                _burst_state["remaining"] = 1  # 休息期只执行1次
+            else:
+                # 休息期结束，进入密集期
+                _burst_state["is_burst"] = True
+                _burst_state["remaining"] = random.randint(burst_count_min, burst_count_max)
+        
+        # 根据当前状态生成间隔
+        if _burst_state["is_burst"]:
+            # 密集期：短间隔，添加轻微随机性避免规律
+            interval = random.uniform(burst_short_min, burst_short_max)
+            # 偶尔（5%概率）添加额外延迟，模拟人类分心
+            if random.random() < 0.05:
+                interval += random.uniform(3, 8)
+                cout.info("[人性化] 偶尔分心，额外等待...")
+            _burst_state["remaining"] -= 1
+        else:
+            # 休息期：长间隔，有时会增加更长的"离开电脑"时间
+            interval = random.uniform(burst_rest_min, burst_rest_max)
+            # 20%概率模拟"离开电脑做其他事"，额外增加5-15分钟
+            if random.random() < 0.2:
+                extra = random.uniform(300, 480)  # 5-8分钟
+                interval += extra
+                cout.info(f"[人性化] 离开休息 {extra/60:.1f} 分钟...")
+            _burst_state["remaining"] -= 1
+        
+        return interval
+        
+    elif distribution == "uniform":
+        # 均匀分布：在 [interval*(1-dev), interval*(1+dev)] 范围内均匀随机
+        min_val = refresh_interval * (1 - refresh_random_deviation)
+        max_val = refresh_interval * (1 + refresh_random_deviation)
+        interval = random.uniform(min_val, max_val)
+        
+    elif distribution == "poisson":
+        # 泊松过程使用指数分布生成等待时间
+        # 指数分布具有无记忆性：P(X>s+t|X>s) = P(X>t)
+        # 适合模拟"突发-间隔"型行为
+        # lambda = 1/mean，deviation 控制形状
+        mean = refresh_interval
+        # 使用指数分布：f(x) = (1/λ) * exp(-x/λ)，其中 λ 是均值
+        # random.expovariate(lambd) 返回指数分布，lambd = 1/mean
+        # 通过 deviation 调整，让分布更分散
+        lambd = 1.0 / (mean * refresh_random_deviation)
+        interval = random.expovariate(lambd)
+        # 指数分布可能产生极大值，加上一个上限
+        max_interval = refresh_interval * 5
+        interval = min(interval, max_interval)
+        
+    else:  # normal (default)
+        # 正态分布 (高斯分布)
+        # 68% 的数据落在 ±1σ 内，95% 落在 ±2σ 内
+        mean = refresh_interval
+        sigma = refresh_interval * refresh_random_deviation
+        interval = random.gauss(mean, sigma)
+    
+    # 确保最小间隔为基准值的 10%，避免过于频繁
+    min_interval = refresh_interval * 0.1
+    return max(interval, min_interval)
 
 
 def _ignore_course(course, reason):
@@ -104,6 +207,11 @@ def _format_timestamp(timestamp):
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
 
 
+def _human_like_delay(min_seconds=0.5, max_seconds=2.0):
+    """模拟人类的操作延迟，用于请求之间"""
+    time.sleep(random.uniform(min_seconds, max_seconds))
+
+
 def _dump_respose_content(content, filename):
     path = os.path.join(_USER_WEB_LOG_DIR, filename)
     with open(path, 'wb') as fp:
@@ -112,6 +220,20 @@ def _dump_respose_content(content, filename):
 
 def run_iaaa_loop():
     elective = None
+    # 指数退避：登录失败后等待时间逐渐增加
+    _login_backoff = 1.0  # 初始退避时间
+    _login_backoff_max = 60.0  # 最大退避时间
+    _login_backoff_multiplier = 2.0  # 乘数
+    _login_consecutive_failures = 0  # 连续失败次数
+    _login_last_success = time.time()  # 上次成功时间
+    
+    # 冷却期配置
+    _cooldown_threshold = 10  # 连续失败 10 次后进入冷却
+    _cooldown_time = 300      # 冷却 5 分钟 (300秒)
+    
+    # 重启配置：连续2次登录失败后重启应用
+    _restart_threshold = 2    # 连续失败阈值
+    _restart_wait = 180       # 重启前等待3分钟
 
     while True:
 
@@ -122,13 +244,14 @@ def run_iaaa_loop():
                 return
 
         environ.iaaa_loop += 1
-        user_agent = random.choice(USER_AGENT_LIST)
+        user_agent = _get_random_user_agent()
 
         cout.info("Try to login IAAA (client: %s)" % elective.id)
         cout.info("User-Agent: %s" % user_agent)
 
+        login_success = False
+        
         try:
-
             iaaa = IAAAClient(timeout=iaaa_client_timeout)  # not reusable
             iaaa.set_user_agent(user_agent)
 
@@ -164,6 +287,11 @@ def run_iaaa_loop():
 
             electivePool.put_nowait(elective)
             elective = None
+            login_success = True
+            # 重置退避
+            _login_consecutive_failures = 0
+            _login_backoff = 1.0
+            _login_last_success = time.time()
 
         except (ServerError, StatusCodeError) as e:
             ferr.error(e)
@@ -177,11 +305,15 @@ def run_iaaa_loop():
 
         except RequestException as e:
             ferr.error(e)
-            cout.warning("RequestException encountered")
+            cout.warning("RequestException encountered (可能是网络/SSL问题)")
             _add_error(e)
+            # 请求异常时增加退避
+            _login_consecutive_failures += 1
 
         except IAAAIncorrectPasswordError as e:
             cout.error(e)
+            cout.error("Username: %s" % username)
+            cout.error("Password: %s" % password)
             _add_error(e)
             raise e
 
@@ -219,7 +351,41 @@ def run_iaaa_loop():
             raise e
 
         finally:
-            t = login_loop_interval
+            # 动态计算等待时间
+            if login_success:
+                # 成功时使用基础间隔 + 随机抖动
+                base_interval = login_loop_interval
+                # 如果距上次成功时间较短，适当增加间隔（避免密集登录）
+                time_since_last = time.time() - _login_last_success
+                if time_since_last < 30:
+                    base_interval += random.uniform(2, 5)
+                t = base_interval + random.uniform(-0.5, 0.5)
+                t = max(t, 1.0)
+            else:
+                # 检查是否需要重启应用（连续2次失败）
+                if _login_consecutive_failures >= _restart_threshold:
+                    cout.critical(f"🚨 连续登录失败 {_login_consecutive_failures} 次，{_restart_wait}秒后重启应用...")
+                    time.sleep(_restart_wait)
+                    import sys
+                    cout.critical("🔄 正在重启应用...")
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                
+                # 检查是否需要进入冷却期
+                if _login_consecutive_failures >= _cooldown_threshold:
+                    # 连续失败超过阈值，进入冷却期
+                    t = _cooldown_time + random.uniform(0, 60)  # 5分钟 + 随机0-60秒
+                    cout.critical(f"🚨 连续失败 {_login_consecutive_failures} 次，进入冷却期！")
+                    cout.critical(f"🚨 建议检查：1) 网络连接 2) 是否被封IP 3) 服务器状态")
+                    cout.critical(f"🚨 冷却等待: {t:.0f}秒 ({t/60:.1f}分钟)...")
+                    # 重置退避，但保留失败计数
+                    _login_backoff = 1.0
+                else:
+                    # 失败时使用指数退避
+                    _login_backoff = min(_login_backoff * _login_backoff_multiplier, _login_backoff_max)
+                    # 添加随机性避免多个客户端同时重试
+                    t = _login_backoff + random.uniform(0, _login_backoff * 0.3)
+                    cout.warning(f"登录失败，指数退避: 等待 {t:.1f}s (连续失败 {_login_consecutive_failures} 次)")
+            
             cout.info("")
             cout.info("IAAA login loop sleep %s s" % t)
             cout.info("")
@@ -272,7 +438,7 @@ def run_elective_loop():
 
     for ix in range(1, elective_client_pool_size + 1):
         client = ElectiveClient(id=ix, timeout=elective_client_timeout)
-        client.set_user_agent(random.choice(USER_AGENT_LIST))
+        client.set_user_agent(_get_random_user_agent())
         electivePool.put_nowait(client)
 
     ## print header
@@ -298,6 +464,11 @@ def run_elective_loop():
     cout.info("identity: %s" % identity)
     cout.info("refresh_interval: %s" % refresh_interval)
     cout.info("refresh_random_deviation: %s" % refresh_random_deviation)
+    cout.info("refresh_random_distribution: %s" % refresh_random_distribution)
+    if refresh_random_distribution.lower() == "burst":
+        cout.info("burst_short: %s~%s" % (burst_short_min, burst_short_max))
+        cout.info("burst_rest: %s~%s" % (burst_rest_min, burst_rest_max))
+        cout.info("burst_count: %s~%s" % (burst_count_min, burst_count_max))
     cout.info("supply_cancel_page: %s" % supply_cancel_page)
     cout.info("iaaa_client_timeout: %s" % iaaa_client_timeout)
     cout.info("elective_client_timeout: %s" % elective_client_timeout)
@@ -390,8 +561,8 @@ def run_elective_loop():
                     cout.info("Logout")
                     r = elective.logout()
                 except Exception as e:
-                    cout.warning("Logout error")
-                    cout.exception(e)
+                    # Logout 不是关键操作，SSL 错误可以忽略
+                    cout.warning("Logout failed (ignore): %s" % type(e).__name__)
                 raise _ElectiveExpired  # quit this loop
 
             ## check supply/cancel page
@@ -401,6 +572,7 @@ def run_elective_loop():
             if supply_cancel_page == 1:
 
                 cout.info("Get SupplyCancel page %s" % supply_cancel_page)
+                _human_like_delay(0.3, 1.0)  # 模拟人类点击后的等待
 
                 r = page_r = elective.get_SupplyCancel(username)
                 tables = get_tables(r._tree)
@@ -448,6 +620,7 @@ def run_elective_loop():
                         retry -= 1
 
             ## check available courses
+            _human_like_delay(0.5, 1.5)  # 页面加载后的思考时间
 
             cout.info("Get available courses")
 
@@ -659,8 +832,13 @@ def run_elective_loop():
 
         except RequestException as e:
             ferr.error(e)
-            cout.warning("RequestException encountered")
+            cout.warning("RequestException encountered (网络/SSL问题)")
             _add_error(e)
+            # 如果是 SSL 错误，增加额外等待时间，避免频繁重试
+            if "SSL" in str(e) or "EOF" in str(e):
+                extra_wait = random.uniform(10, 50)
+                cout.warning(f"检测到SSL错误，额外等待 {extra_wait:.1f}s...")
+                time.sleep(extra_wait)
 
         except IAAAException as e:
             ferr.error(e)

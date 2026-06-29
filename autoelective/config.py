@@ -114,6 +114,63 @@ class AutoElectiveConfig(BaseConfig, metaclass=Singleton):
         return self.getfloat("client", "random_deviation")
 
     @property
+    def refresh_random_distribution(self):
+        """随机分布类型: normal/poisson/uniform/burst"""
+        try:
+            return self.get("client", "random_distribution")
+        except:
+            return "normal"  # 默认正态分布
+
+    # Burst (突发-休息) 模式配置
+    @property
+    def burst_short_min(self):
+        """密集期最短间隔（秒）"""
+        try:
+            return self.getfloat("client", "burst_short_min")
+        except:
+            return 3.0
+
+    @property
+    def burst_short_max(self):
+        """密集期最长间隔（秒）"""
+        try:
+            return self.getfloat("client", "burst_short_max")
+        except:
+            return 8.0
+
+    @property
+    def burst_rest_min(self):
+        """休息期最短间隔（秒）"""
+        try:
+            return self.getfloat("client", "burst_rest_min")
+        except:
+            return 45.0
+
+    @property
+    def burst_rest_max(self):
+        """休息期最长间隔（秒）"""
+        try:
+            return self.getfloat("client", "burst_rest_max")
+        except:
+            return 90.0
+
+    @property
+    def burst_count_min(self):
+        """密集期最少连续次数"""
+        try:
+            return self.getint("client", "burst_count_min")
+        except:
+            return 5
+
+    @property
+    def burst_count_max(self):
+        """密集期最多连续次数"""
+        try:
+            return self.getint("client", "burst_count_max")
+        except:
+            return 15
+
+    @property
     def iaaa_client_timeout(self):
         return self.getfloat("client", "iaaa_client_timeout")
 

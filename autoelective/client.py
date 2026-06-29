@@ -6,6 +6,8 @@
 from requests.models import Request
 from requests.sessions import Session
 from requests.cookies import extract_cookies_to_jar
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 class BaseClient(object):
 
@@ -18,6 +20,30 @@ class BaseClient(object):
         self._timeout = kwargs.get("timeout", self.__class__.default_client_timeout)
         self._session = Session()
         self._session.headers.update(self.__class__.default_headers)
+        
+        # 添加重试适配器，增强 SSL/连接稳定性
+        retry_strategy = Retry(
+            total=3,                    # 总重试次数
+            backoff_factor=1,           # 重试间隔：1s, 2s, 4s
+            status_forcelist=[429, 500, 502, 503, 504],  # 这些状态码会触发重试
+            allowed_methods=["HEAD", "GET", "POST"]
+        )
+        
+        # 增加连接池大小和超时，模拟浏览器行为
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,        # 连接池大小
+            pool_maxsize=10,            # 最大连接数
+            pool_block=False,           # 连接池满时不阻塞
+        )
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+        
+        # 设置 keep-alive，复用连接
+        self._session.headers.update({
+            "Connection": "keep-alive",
+            "Accept-Encoding": "gzip, deflate, br",
+        })
 
     @property
     def user_agent(self):
