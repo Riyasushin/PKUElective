@@ -6,7 +6,7 @@
 import time
 import string
 import random
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 from .client import BaseClient
 from .hook import get_hooks, debug_dump_request, debug_print_request, check_status_code, with_etree,\
     check_elective_title, check_elective_tips
@@ -212,7 +212,11 @@ class ElectiveClient(BaseClient):
     def get_ElectSupplement(self, href, **kwargs):
         """ 补选一门课 """
 
-        if "/supplement/electSupplement.do" not in href:
+        url = urljoin(ElectiveURL.Supplement, href or '')
+        parsed = urlsplit(url)
+        expected = urlsplit(ElectiveURL.Supplement).path.rsplit('/', 1)[0] + '/electSupplement.do'
+        if (parsed.scheme != 'https' or parsed.netloc != ElectiveURL.Host
+                or parsed.path != expected):
             raise RuntimeError(
                 "If %r is really a 'electSupplement' href, it would certainly contains '/supplement/electSupplement.do'. "
                 "If you see this error, that means maybe something terrible will happpen ! Please raise an issue at "
@@ -221,7 +225,7 @@ class ElectiveClient(BaseClient):
 
         headers = _get_headers_with_referer(kwargs, ElectiveURL.SupplyCancel)
         r = self._get(
-            url="%s://%s%s" % (ElectiveURL.Scheme, ElectiveURL.Host, href),
+            url=url,
             headers=headers,
             hooks=_hooks_check_tips,
             **kwargs,

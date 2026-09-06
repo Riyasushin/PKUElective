@@ -69,8 +69,7 @@ _USER_WEB_LOG_DIR = os.path.join(WEB_LOG_DIR, config.get_user_subpath())
 mkdir(_USER_WEB_LOG_DIR)
 
 # recognizer = CaptchaRecognizer()
-recognizer = TTShituRecognizer()
-asyncRecognizer = RecognitionProxy()
+asyncRecognizer = None  # Load credentials only when a course needs a captcha.
 RECOGNIZER_MAX_ATTEMPT = 15
 
 # UA 选择器，避免连续使用相同的 UA
@@ -313,7 +312,6 @@ def run_iaaa_loop():
         except IAAAIncorrectPasswordError as e:
             cout.error(e)
             cout.error("Username: %s" % username)
-            cout.error("Password: %s" % password)
             _add_error(e)
             raise e
 
@@ -393,6 +391,7 @@ def run_iaaa_loop():
 
 
 def run_elective_loop():
+    global asyncRecognizer
     elective = None
     noWait = False
 
@@ -682,19 +681,21 @@ def run_elective_loop():
 
                 cout.info("Try to elect %s" % course)
 
-                # validate captcha first
+                # validate captcha with a finite attempt budget
 
-                while True:
+                for attempt in range(RECOGNIZER_MAX_ATTEMPT):
 
                     cout.info("Fetch a captcha")
                     r = elective.get_DrawServlet()
 
+                    if asyncRecognizer is None:
+                        asyncRecognizer = RecognitionProxy()
                     captcha = asyncRecognizer.recognize(r.content)
                     cout.info("Recognition result: %s" % captcha.code)
 
                     r = elective.get_Validate(username, captcha.code)
                     try:
-                        res = r.json()["valid"]  # 可能会返回一个错误网页
+                        res = str(r.json()["valid"])  # 可能会返回一个错误网页
                     except Exception as e:
                         ferr.error(e)
                         raise OperationFailedError(msg="Unable to validate captcha")
@@ -708,7 +709,9 @@ def run_elective_loop():
                         cout.info("Auto error caching skipped for good")
                         cout.info("Try again")
                     else:
-                        cout.warning("Unknown validation result: %s" % res)
+                        raise OperationFailedError(msg="Unknown validation result")
+                else:
+                    raise OperationFailedError(msg="Captcha attempt limit reached")
 
                 ## try to elect
 

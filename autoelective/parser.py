@@ -17,13 +17,17 @@ def get_tree(content):
     return etree.HTML(content)
 
 def get_tables(tree):
-    return tree.xpath('.//table//table[@class="datagrid"]')
+    return tree.xpath('.//table[contains(concat(" ", normalize-space(@class), " "), " datagrid ")]')
+
+def cell_text(cell):
+    return ''.join(cell.itertext()).strip()
 
 def get_table_header(table):
-    return table.xpath('.//tr[@class="datagrid-header"]/th/text()')
+    rows = table.xpath('.//tr[contains(concat(" ", normalize-space(@class), " "), " datagrid-header ")]')
+    return [cell_text(c) for c in rows[0].xpath('./th | ./td')] if rows else []
 
 def get_table_trs(table):
-    return table.xpath('.//tr[@class="datagrid-odd" or @class="datagrid-even"]')
+    return table.xpath('.//tr[contains(concat(" ", normalize-space(@class), " "), " datagrid-odd ") or contains(concat(" ", normalize-space(@class), " "), " datagrid-even ")]')
 
 def get_title(tree):
     title = tree.find('.//head/title')
@@ -56,7 +60,7 @@ def get_courses(table):
     cs = []
     for tr in trs:
         t = tr.xpath('./th | ./td')
-        name, class_no, school = map(lambda ix: t[ix].xpath('.//text()')[0], ixs)
+        name, class_no, school = (cell_text(t[ix]) for ix in ixs)
         c = Course(name, class_no, school)
         cs.append(c)
     return cs
@@ -68,10 +72,18 @@ def get_courses_with_detail(table):
     cs = []
     for tr in trs:
         t = tr.xpath('./th | ./td')
-        name, class_no, school, status, _ = map(lambda ix: t[ix].xpath('.//text()')[0], ixs)
+        name, class_no, school, status, _ = (cell_text(t[ix]) for ix in ixs)
         status = tuple(map(int, status.split("/")))
-        href = t[ixs[-1]].xpath('./a/@href')[0]
+        links = t[ixs[-1]].xpath('.//a/@href')
+        href = links[0] if links else None
         c = Course(name, class_no, school, status, href)
         cs.append(c)
     return cs
 
+def get_election_states(table):
+    header = get_table_header(table)
+    if '选课状态' not in header:
+        raise ValueError('Selected-course table has no election state column')
+    ix = header.index('选课状态')
+    return {course: cell_text(row.xpath('./th | ./td')[ix])
+            for course, row in zip(get_courses(table), get_table_trs(table))}

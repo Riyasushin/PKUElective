@@ -27,6 +27,12 @@ def create_default_parser():
     )
 
     ## boolean (flag) options
+    parser.add_option('--check', action='store_true', default=False,
+                      help='login and inspect one configured course without submitting')
+    parser.add_option('--once', action='store_true', default=False,
+                      help='attempt one configured course once, then verify and exit')
+    parser.add_option('--captcha-attempts', type='int', default=3,
+                      help='maximum captcha attempts in --once (default: 3)')
 
     parser.add_option(
         '-m',
@@ -80,6 +86,28 @@ def run():
     options, args = parser.parse_args()
 
     setup_default_environ(options, args, environ)
+
+    if options.check or options.once:
+        if options.check and options.once:
+            parser.error('--check and --once are mutually exclusive')
+        if not 1 <= options.captcha_attempts <= 15:
+            parser.error('--captcha-attempts must be between 1 and 15')
+        from .config import AutoElectiveConfig
+        from .workflow import run_once
+        try:
+            result = run_once(AutoElectiveConfig(), submit=options.once,
+                              attempts=options.captcha_attempts)
+            print('Result: %s' % result, flush=True)
+        except Exception as exc:
+            # Exception responses can contain credentials: print only the class.
+            print('Failed: %s' % type(exc).__name__, flush=True)
+            from .exceptions import RecognizerError
+            if isinstance(exc, RecognizerError):
+                print(str(exc), flush=True)  # Recognizer supplies a sanitized reason.
+            raise SystemExit(1)
+        if options.once and result not in ('elected', 'already_elected'):
+            raise SystemExit(2)
+        return
 
     tList = create_default_threads(options, args, environ)
 

@@ -1,9 +1,34 @@
 # PKUAutoElective 2022 Spring Version
 
+## 2026-09-06 实测更新
+
+已实测通过：IAAA 登录 → 列表解析 → TT 识图（HTTPS）→ 验证码校验 → 单次补选 → 查询确认已选上。测试结果见 [RUN_VALIDATION_2026-09-06.md](RUN_VALIDATION_2026-09-06.md)。
+
+环境使用 Python >=3.13。此次使用本机 Python 3.14 安装锁定依赖：
+
+```sh
+uv sync --locked --python /opt/homebrew/bin/python3.14
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+填写 `config.ini` 和 `apikey.json`（分别参考两个 sample 文件）。`apikey.json` 需包含 `username`、`password`、`RecognitionTypeid`、`Timeout`；识别类型现在实际生效，每张图片只发一次请求。
+
+```sh
+# 仅登录查询；不调用 TT 识图、不提交选课
+.venv/bin/python main.py --check -c config.ini
+
+# 最多尝试 3 次验证码，只提交一次，再查已选状态并退出
+.venv/bin/python main.py --once --captcha-attempts 3 -c config.ini
+```
+
+`--check` / `--once` 当前要求配置恰好一门目标课程，按 `supply_cancel_page` 指定页查找。已选上会直接跳过；候补不算选课成功。`--once` 成功退出码为 0，尚未选上（满额/延迟/候补）为 2，异常为 1。默认不加这两个参数仍为原轮询模式；本次真实提交验收针对 `--once`。
+
+以下为历史文档；服务地址、类型选择及依赖以当前代码和以上说明为准。
+
 ## (可选)推送刷课进度、刷课机运行状态和错误信息到微信（需要用到第三方平台sre24）
 
 推送 token 值通过微信扫码登录 https://sre24.com 「设置」页面获取，对应修改config.ini中notification信息
-    
+
     disable_push = 0  (默认为1，即不接收)
     token = xxxxx  (您扫码关注公众号后，得到的token值，请不要加双引号)
     verbosity = 1 (推送消息详细级别，1为推送选课成功、失败；2为在此基础上推送所有ERROR类型消息)
@@ -28,9 +53,9 @@
 请参考 [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) 项目提供的安装指南进行安装，但本项目**不**依赖于 `pytorch`，因此可以**省略**其中的以下部分
 
 > 安装 PyTorch，从 PyTorch 官网 中选择合适的条件获得下载命令，然后复制粘贴到命令行中运行即可下载安装。（注：本项目不需要 cuda，当然你可以安装带 gpu 优化的版本）
-> 
+>
 > ......
-> 
+>
 > PyTorch 安装时间可能比较长，需耐心等待。
 > 如果实在无法安装，可以考虑用其他方式安装 PyTorch，详见附页 PyTorch 安装
 
@@ -42,14 +67,14 @@
 
 ### apikey.json
 
-**请首先将 apikey.sample.ini 复制一份并改名为 apikey.ini，并按照以下说明进行配置。**
+**请首先将 apikey.sample.json 复制一份并改名为 apikey.json，并按照以下说明进行配置。**
 
 该文件为 [TT识图](http://www.ttshitu.com) 平台的 API 密钥，在平台注册后，填入用户名与密码即可。由于该 API 需要收费，须在平台充值后方可使用（1 RMB 足够用到天荒地老了）。
 
 ```json
 {
     "username": "xiaoming",
-    "password": "xiaominghaoshuai" 
+    "password": "xiaominghaoshuai"
 }
 ```
 
@@ -75,7 +100,7 @@ python3 main.py
 配置好 `apikey.json` 后，在命令行运行以下指令以测试在线识图是否正常工作
 
 ```
-python -c "import base64; from autoelective.captcha import TTShituRecognizer; 
+python -c "import base64; from autoelective.captcha import TTShituRecognizer;
 c = TTShituRecognizer().recognize(base64.b64decode(
 'iVBORw0KGgoAAAANSUhEUgAAAIIAAAA0CAMAAABxThCnAAADAFBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAz'
 'AABmAACZAADMAAD/AAAAMwAzMwBmMwCZMwDMMwD/MwAAZgAzZgBmZgCZZgDMZgD/ZgAAmQAzmQBmmQCZmQDMmQD/mQAAzAAzzABm'

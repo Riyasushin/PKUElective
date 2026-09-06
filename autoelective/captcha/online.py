@@ -17,13 +17,12 @@ class APIConfig(object):
     def __init__(self, path=_DEFAULT_CONFIG_PATH):
         with open(get_abs_path(path), 'r') as handle:
             self._apikey = json.load(handle)
-        try:
-            assert 'username' in self._apikey.keys() and 'password' in self._apikey.keys()
-            assert 'RecognitionTypeid' in self._apikey.keys()
-            assert 'Timeout' in self._apikey.keys()
-        except AssertionError as e:
-            print("Check your apikey.json for necessary key")
-            exit(-1)
+        for key in ('username', 'password', 'RecognitionTypeid', 'Timeout'):
+            if key not in self._apikey or not str(self._apikey[key]).strip():
+                raise ValueError('Missing apikey.json field: %s' % key)
+        if self.timeout <= 0:
+            raise ValueError('apikey.json Timeout must be positive')
+        self.typeid
 
     @property
     def uname(self):
@@ -43,33 +42,44 @@ class APIConfig(object):
 
 
 class TTShituRecognizer(object):
-    _RECOGNIZER_URL = "http://api.ttshitu.com/base64"
+    _RECOGNIZER_URL = "https://api.ttshitu.com/base64"
 
     def __init__(self):
         self._config = APIConfig()
 
     def recognize(self, raw):
         _typeid_ = self._config.typeid
-        encode = TTShituRecognizer.to_b64(raw)
+        encode = self.to_b64(raw)
         data = {
             "username": self._config.uname,
             "password": self._config.pwd,
             "image": encode,
             "typeid": _typeid_
         }
-        requests.post(TTShituRecognizer._RECOGNIZER_URL, json=data, timeout=20)  # Send request
         try:
-            result = json.loads(requests.post(TTShituRecognizer._RECOGNIZER_URL, json=data, timeout=20).text)
+            response = requests.post(self._RECOGNIZER_URL, json=data, timeout=self._config.timeout)
+            response.raise_for_status()
+            result = response.json()
         except requests.Timeout:
             raise OperationTimeoutError(msg="Recognizer connection time out")
         except requests.ConnectionError:
             raise OperationFailedError(msg="Unable to coonnect to the recognizer")
+        except (requests.RequestException, ValueError):
+            raise RecognizerError(msg="Recognizer returned an invalid response") from None
 
-        if result["success"]:
-            return Captcha(result["data"]["result"], None, None, None, None)
-        else:  # fail
-            raise RecognizerError(msg="Recognizer ERROR: %s" % result["message"])
+        if not isinstance(result, dict) or result.get('success') is not True:
+            reason = str(result.get('message', 'unrecognized response')) if isinstance(result, dict) else 'unrecognized response'
+            for secret in (self._config.uname, self._config.pwd):
+                if isinstance(secret, str) and secret:
+                    reason = reason.replace(secret, '[redacted]')
+            raise RecognizerError(msg='Recognizer rejected request: %s' % reason[:200])
+        payload = result.get('data')
+        code = payload.get('result') if isinstance(payload, dict) else None
+        if not isinstance(code, str) or not code.strip():
+            raise RecognizerError(msg="Recognizer returned no code")
+        return Captcha(code.strip(), None, None, None, None)
 
+    @staticmethod
     def to_b64(raw):
         im = Image.open(BytesIO(raw))
         try:
