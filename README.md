@@ -1,178 +1,147 @@
-# PKUAutoElective 2022 Spring Version
+# PKUAutoElective
 
-## 2026-09-06 实测更新
+北京大学补退选助手：查询选课计划中的课程，有名额时尝试补选。目标课程需要先在网页上加入“选课计划”；程序不会自动添加计划或退课。
 
-已实测通过：IAAA 登录 → 列表解析 → TT 识图（HTTPS）→ 验证码校验 → 单次补选 → 查询确认已选上。测试结果见 [RUN_VALIDATION_2026-09-06.md](RUN_VALIDATION_2026-09-06.md)。
-
-环境使用 Python >=3.13。此次使用本机 Python 3.14 安装锁定依赖：
-
-```sh
-uv sync --locked --python /opt/homebrew/bin/python3.14
-.venv/bin/python -m unittest discover -s tests -v
-```
-
-填写 `config.ini` 和 `apikey.json`（分别参考两个 sample 文件）。`apikey.json` 需包含 `username`、`password`、`RecognitionTypeid`、`Timeout`；识别类型现在实际生效，每张图片只发一次请求。
-
-```sh
-# 仅登录查询；不调用 TT 识图、不提交选课
-.venv/bin/python main.py --check -c config.ini
-
-# 最多尝试 3 次验证码，只提交一次，再查已选状态并退出
-.venv/bin/python main.py --once --captcha-attempts 3 -c config.ini
-```
-
-`--check` / `--once` 当前要求配置恰好一门目标课程，按 `supply_cancel_page` 指定页查找。已选上会直接跳过；候补不算选课成功。`--once` 成功退出码为 0，尚未选上（满额/延迟/候补）为 2，异常为 1。默认不加这两个参数仍为原轮询模式；本次真实提交验收针对 `--once`。
-
-以下为历史文档；服务地址、类型选择及依赖以当前代码和以上说明为准。
-
-## (可选)推送刷课进度、刷课机运行状态和错误信息到微信（需要用到第三方平台sre24）
-
-推送 token 值通过微信扫码登录 https://sre24.com 「设置」页面获取，对应修改config.ini中notification信息
-
-    disable_push = 0  (默认为1，即不接收)
-    token = xxxxx  (您扫码关注公众号后，得到的token值，请不要加双引号)
-    verbosity = 1 (推送消息详细级别，1为推送选课成功、失败；2为在此基础上推送所有ERROR类型消息)
-    minimum_interval = -1 (最小消息时间间隔，单位为秒，若消息产生时，距离上次成功发送不足这一时间，则取消发送。-1为不设置)
-保存后，重启刷课机生效。
-
-可以通过notification/wechat_push.py中的test_notify()以测试设置是否正确。
-
-**Update at Feb 21, 2022**: 验证码错误时，少数情况下重试会出现`NoneType' object has no attribute 'tobytes'`报错，且exceptions中并未提供处理机制。考虑到Captcha类成员函数save()对主要功能并无影响，故删除loop.py中相关调用以避免程序异常停止。
-
-**Update at Feb 20, 2022**: 对KingOfDebug同学的repo出现`[104] unable to parse HTML content`的问题，对parsing.py, captcha/等部分进行了替换，同步修改了loop.py
-同时对captcha/online.py中的TTShituRecognizer类进行修改，对data增加typeid==7，调用平台的无感学习模型，规避TT平台默认的英文数字混合，在改版后识别率欠佳的问题。
-
-## 感谢zhongxinghong, Mzhhh, KingOfDeBug等同学
-
-**Update at Mar 7 15:28 (UTC+8)**: 修改了 `get_supplement` 的 API 参数，已经可以实现课程列表页面的正常跳转，请更新至最新 commit 版本。
-
-本项目基于 [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective)，对 2021 春季学期的选课网站 API 改动进行了调整。并针对验证码系统的改动，将识别系统转为在线商用平台 [TT识图](http://www.ttshitu.com)（打钱！打钱！），目前识别准确度仍然略微堪忧。
+2026-09-06 已用“机器学习”完成真实补选，并重新登录确认“已选上”。长期轮询、双学位和候补阶段还没有完整验证，详见[实测记录](RUN_VALIDATION_2026-09-06.md)。
 
 ## 安装
 
-请参考 [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) 项目提供的安装指南进行安装，但本项目**不**依赖于 `pytorch`，因此可以**省略**其中的以下部分
+需要 Python 3.13 及以上、uv。在仓库目录运行：
 
-> 安装 PyTorch，从 PyTorch 官网 中选择合适的条件获得下载命令，然后复制粘贴到命令行中运行即可下载安装。（注：本项目不需要 cuda，当然你可以安装带 gpu 优化的版本）
->
-> ......
->
-> PyTorch 安装时间可能比较长，需耐心等待。
-> 如果实在无法安装，可以考虑用其他方式安装 PyTorch，详见附页 PyTorch 安装
+```sh
+uv sync --locked
+```
 
-## 配置文件
+仓库的 `.python-version` 指定 3.13。本次实测使用已安装的 Python 3.14，可显式选择：
 
-### config.ini
+```sh
+uv sync --locked --python python3.14
+```
 
-参考 [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) 项目中的 `config.ini` 配置说明。
+下面命令使用 macOS / Linux 的 `.venv/bin/python`，确保运行的是刚装好依赖的环境。
 
-### apikey.json
+## 配置
 
-**请首先将 apikey.sample.json 复制一份并改名为 apikey.json，并按照以下说明进行配置。**
+首次使用时复制样例；已有配置就直接编辑，不要覆盖：
 
-该文件为 [TT识图](http://www.ttshitu.com) 平台的 API 密钥，在平台注册后，填入用户名与密码即可。由于该 API 需要收费，须在平台充值后方可使用（1 RMB 足够用到天荒地老了）。
+```sh
+cp config.sample.ini config.ini
+cp apikey.sample.json apikey.json
+chmod 600 config.ini apikey.json
+```
+
+在 `config.ini` 中修改账号、页码，再添加目标课程。以下只是需要修改的部分，其他配置保留样例值：
+
+```ini
+[user]
+student_id = 你的学号
+password = 你的选课密码
+dual_degree = false
+identity = bzx
+
+[client]
+supply_cancel_page = 1
+
+[course:architecture]
+name = 计算机组织与体系结构
+class = 1
+school = 信息科学技术学院
+```
+
+- `name`、`class`、`school` 对应网页上的课程名、班号、开课单位，须与页面一致。班号 `01` 和 `1` 等价。
+- `[course:architecture]` 中的 `architecture` 是你起的标识。写成课程号也可以，但程序实际仍按上述三个字段匹配。
+- `supply_cancel_page` 是目标在可选列表中的页码，从 1 开始。页码可能变化，找不到课程时先核对页面。
+- 需要选择主修/辅双身份的账号，设置 `dual_degree = true`；`identity` 为 `bzx`（主修）或 `bfx`（辅双）。
+
+在 `apikey.json` 中填写 TT 识图账号，注意它与学校账号是两套凭据：
 
 ```json
 {
-    "username": "xiaoming",
-    "password": "xiaominghaoshuai"
+  "username": "你的TT识图账号",
+  "password": "你的TT识图密码",
+  "RecognitionTypeid": "1003",
+  "Timeout": "15"
 }
 ```
 
-## 使用说明
+`RecognitionTypeid` 是识别类型，`Timeout` 是请求超时秒数。本次实测使用 `1003`。每张验证码调用一次识别服务；服务可能产生费用。只读查询不需要这份凭据。
 
-### 基本用法
+两个个人配置文件已被 Git 忽略。INI 注释放在独立行，避免把注释读成配置值。
 
-将项目 clone 至本地后，切换至项目根目录下并运行 `main.py` 即可。
+## 运行
 
-```
-cd PKUElective2021Spring
-python3 main.py
-```
+先查一次，确认账号、课程和页码正确：
 
-使用 `Ctrl + C` 输送 `KeyboardInterrupt`，可以终止程序运行。
-
-### 高级用法
-
-关于支持的命令行参数，参见 [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) 的使用说明。
-
-### 测试识图平台
-
-配置好 `apikey.json` 后，在命令行运行以下指令以测试在线识图是否正常工作
-
-```
-python -c "import base64; from autoelective.captcha import TTShituRecognizer;
-c = TTShituRecognizer().recognize(base64.b64decode(
-'iVBORw0KGgoAAAANSUhEUgAAAIIAAAA0CAMAAABxThCnAAADAFBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAz'
-'AABmAACZAADMAAD/AAAAMwAzMwBmMwCZMwDMMwD/MwAAZgAzZgBmZgCZZgDMZgD/ZgAAmQAzmQBmmQCZmQDMmQD/mQAAzAAzzABm'
-'zACZzADMzAD/zAAA/wAz/wBm/wCZ/wDM/wD//wAAADMzADNmADOZADPMADP/ADMAMzMzMzNmMzOZMzPMMzP/MzMAZjMzZjNmZjOZ'
-'ZjPMZjP/ZjMAmTMzmTNmmTOZmTPMmTP/mTMAzDMzzDNmzDOZzDPMzDP/zDMA/zMz/zNm/zOZ/zPM/zP//zMAAGYzAGZmAGaZAGbM'
-'AGb/AGYAM2YzM2ZmM2aZM2bMM2b/M2YAZmYzZmZmZmaZZmbMZmb/ZmYAmWYzmWZmmWaZmWbMmWb/mWYAzGYzzGZmzGaZzGbMzGb/'
-'zGYA/2Yz/2Zm/2aZ/2bM/2b//2YAAJkzAJlmAJmZAJnMAJn/AJkAM5kzM5lmM5mZM5nMM5n/M5kAZpkzZplmZpmZZpnMZpn/ZpkA'
-'mZkzmZlmmZmZmZnMmZn/mZkAzJkzzJlmzJmZzJnMzJn/zJkA/5kz/5lm/5mZ/5nM/5n//5kAAMwzAMxmAMyZAMzMAMz/AMwAM8wz'
-'M8xmM8yZM8zMM8z/M8wAZswzZsxmZsyZZszMZsz/ZswAmcwzmcxmmcyZmczMmcz/mcwAzMwzzMxmzMyZzMzMzMz/zMwA/8wz/8xm'
-'/8yZ/8zM/8z//8wAAP8zAP9mAP+ZAP/MAP//AP8AM/8zM/9mM/+ZM//MM///M/8AZv8zZv9mZv+ZZv/MZv//Zv8Amf8zmf9mmf+Z'
-'mf/Mmf//mf8AzP8zzP9mzP+ZzP/MzP//zP8A//8z//9m//+Z///M//////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACP6ykAAAOH0lEQVR4nJWZ'
-'PXbkOBKE6bejvsiM0+w2VnORojGAo7oI6DDp6BZrDcpp0CFvsRbgoG6yXySq36yx7+1bSS3VD4tIREZGRqKnetX/76eYvkKM//lT'
-'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'
-'lSfnQz3/Dc7xKmEJtRLLAAAAAElFTkSuQmCC')); print(c, c.code == 'vfg8')"
+```sh
+.venv/bin/python main.py --check -c config.ini
 ```
 
-如正常运行，将输出
+需要尝试一次真实补选时运行：
 
+```sh
+.venv/bin/python main.py --once --captcha-attempts 3 -c config.ini
 ```
-Captcha('vfg8') True
+
+需要持续等待空位时运行：
+
+```sh
+.venv/bin/python -u main.py -c config.ini
 ```
 
+| 模式 | 行为 |
+| --- | --- |
+| `--check` | 登录、查询，然后退出；不识别验证码、不提交 |
+| `--once` | 有名额才识别验证码，最多提交一次，再查询是否选上 |
+| 不加上述参数 | 持续轮询，有名额时尝试补选；前台按 `Ctrl+C` 停止 |
 
-## 注意事项
+`--check` 和 `--once` 每次只支持一门配置课程。轮询支持多门目标和互斥规则，但可选目标必须在同一配置页，尚不支持自动跨页查找。配置修改后需要重启进程才会生效。
 
-* 作者可能无视 issue 和 PR，如果您有更好的改进想法，请最好 clone 一份后自行改动
-* 请不要在公开场合传播此项目，以免造成不必要的麻烦
-* 刷课有风险 USE AT YOUR OWN RISK!
+`--once` 默认最多尝试 3 次验证码，可设为 1–15；这个参数不控制轮询模式。`--once` 遇到提交超时会先查已选状态，不直接重发。
+
+### 读懂结果
+
+| 输出 | 含义 |
+| --- | --- |
+| `available` / `full` | 有余量 / 已满；`available` 不代表已经选上 |
+| `elected` | 本次提交后查询确认已选上 |
+| `already_elected` | 查询发现已经选上，不再提交 |
+| `pending` | 已出现在状态表中，但状态不是“已选上”，例如候补 |
+| `delayed` | 还没达到配置的延迟阈值 |
+| `Failed: …` | 出错，后面是异常类型；识别错误会附脱敏说明 |
+
+`--once` 退出码：选上为 `0`，满额/延迟/候补为 `2`，异常为 `1`。`--check` 正常完成查询为 `0`，即使课程已满。课程缺失或页面解析失败会报错。
+
+### 常见问题
+
+- **找不到课程**：先确认已加入选课计划，再检查页码和三个匹配字段。
+- **`RecognizerError`**：检查 TT 账号、余额、识别类型和错误说明。不能仅凭这一异常判断具体原因。
+- **有余量却选不上**：开课阶段、院系权限、时间冲突等仍由学校系统判断。
+- **进程还在但日志不动**：可能是请求等待或工作线程退出。旧轮询主进程不会可靠地随工作线程结束而退出，不能只看 PID 判断运行正常。
+
+## 可选设置
+
+普通使用可以保留样例默认值：
+
+| 设置 | 什么时候需要改 |
+| --- | --- |
+| `refresh_interval`、`random_deviation` | 控制每轮结束后的等待；默认 normal 以 8 秒为中心波动，整轮还包含请求等耗时 |
+| `mutex:*` | 几门课只选一门时使用；已选中其中一门后忽略其他目标，不会退课 |
+| `delay:*` | 仅在剩余名额小于等于阈值时尝试；不想刻意推迟就不要配 |
+| `monitor` | 轮询加 `-m` 后启用本机状态服务，默认 `127.0.0.1:7074`，可看 `/stat/loop` |
+| `notification` | 可选推送，默认关闭；服务未重新验证 |
+
+保留 `debug_print_request = false` 和 `debug_dump_request = false`；现有详细请求日志仍可能包含认证信息。
+
+## 测试与维护
+
+离线测试不会登录或选课：
+
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+- [代码怎么工作](IMPLEMENTATION_GUIDE.md)：入口、请求顺序、两个运行模式的差别。
+- [问题与修复状态](REPO_AUDIT_2026-09-06.md)：配置细节和还没解决的问题。
+- [实测记录](RUN_VALIDATION_2026-09-06.md)：实际输出和验证范围。
+
+本项目基于 [zhongxinghong/PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective)，感谢原作者及 Mzhhh、KingOfDeBug 等贡献者。旧版本说明可在 Git 历史中查看。
